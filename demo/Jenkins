@@ -1,0 +1,491 @@
+def attestImage(Map attestOptions) {
+  script {
+    // Get the sha value of a image from gcr
+    imageSha = sh (script: "gcloud container images describe us.gcr.io/${attestOptions.gcrProjectId}/${attestOptions.currentAppArtifactId}:${attestOptions.currentAppVersion} --format='value(image_summary.fully_qualified_digest)'", returnStdout: true).trim()
+    sh "echo imageSha:${imageSha}"
+    sh "gcloud alpha container binauthz attestations sign-and-create \
+        --project=${attestOptions.gcrProjectId} \
+        --artifact-url=${imageSha} \
+        --attestor=${attestOptions.gcrAttestor} \
+        --attestor-project=${attestOptions.gcrProjectId} \
+        --keyversion-project=${attestOptions.secProject} \
+        --keyversion-location=us-east1 \
+        --keyversion-keyring=${attestOptions.kmsKeyring} \
+        --keyversion-key=${attestOptions.gcrAttestorkey} \
+        --keyversion=1 \
+        --public-key-id-override=projects/${attestOptions.secProject}/locations/us-east1/keyRings/${attestOptions.kmsKeyring}/cryptoKeys/${attestOptions.gcrAttestorkey}"
+  }
+}
+
+def kanikoCustom(Map kanikoOptions) {
+  script {
+    // using proxy to pull base images from GCR
+    // export https_proxy=http://172.25.49.99:3128 && export HTTPS_PROXY=http://172.25.49.99:3128 &&
+
+    sh """
+    cat /kaniko/.docker/config.json
+    echo ' { "auths": { "registry.docker.nexus.global.equifax.com:7062": { "auth": "RjZ6RE4tRTI6TTJfNzQtRDlNYUE2VjZMVGpTMUtPcVBXenU0TW5jZUlXTUFtRUZQaWFncFQ=" } }, "credHelpers": {    "asia.gcr.io": "gcr",    "eu.gcr.io": "gcr",    "gcr.io": "gcr",    "staging-k8s.gcr.io": "gcr",    "us.gcr.io": "gcr"  } } ' > /kaniko/.docker/config.json
+    cat /kaniko/.docker/config.json
+    """
+
+    //sh " echo eyJhdXRocyI6IHsicmVnaXN0cnkuZG9ja2VyLm5leHVzLmdsb2JhbC5lcXVpZmF4LmNvbTo3MDYyIjogeyJhdXRoIjogIlNGRm5NRTAzZEcwNmFuazFkSFJuVG1GR1JEbHFVbk5qTjFCZlFWRkRaVGxrVjNVNFpGZFRVVlJhT0RKcVpWQnpjVTFrYWtZPSJ9fX0= | base64 -d | python -m json.tool > /kaniko/.docker/config.json"
+
+     //pushes image to GCR
+    if (kanikoOptions.buildChaosMonkey) {
+      sh "/kaniko/executor --digest-file=/kaniko/digest --build-arg PROJECT_ID=${kanikoOptions.gcrProjectId} --build-arg appVersion=${kanikoOptions.currentAppVersion} --build-arg GIT_COMMIT=${env.GIT_COMMIT} --build-arg GIT_URL=${env.GIT_URL} --build-arg GIT_BRANCH=${env.GIT_BRANCH} --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} --build-arg BUILD_URL=${env.BUILD_URL} --build-arg JAR_FILE=${kanikoOptions.currentAppArtifactId}-${kanikoOptions.currentAppVersion}.jar -f `pwd`/Dockerfile_chaos_monkey -c `pwd` --skip-tls-verify --destination=gcr.io/${kanikoOptions.gcrProjectId}/${kanikoOptions.currentAppArtifactId}:${kanikoOptions.currentAppVersion}"
+    } else {
+      sh "/kaniko/executor --digest-file=/kaniko/digest --build-arg PROJECT_ID=${kanikoOptions.gcrProjectId} --build-arg appVersion=${kanikoOptions.currentAppVersion} --build-arg GIT_COMMIT=${env.GIT_COMMIT} --build-arg GIT_URL=${env.GIT_URL} --build-arg GIT_BRANCH=${env.GIT_BRANCH} --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} --build-arg BUILD_URL=${env.BUILD_URL} --build-arg JAR_FILE=${kanikoOptions.currentAppArtifactId}-${kanikoOptions.currentAppVersion}.jar -f `pwd`/Dockerfile -c `pwd` --skip-tls-verify --destination=gcr.io/${kanikoOptions.gcrProjectId}/${kanikoOptions.currentAppArtifactId}:${kanikoOptions.currentAppVersion}"
+    }
+    sh "cat /kaniko/digest"
+
+    //pushes image to Nexus
+    /*if (kanikoOptions.buildChaosMonkey) {
+      sh "/kaniko/executor --cleanup --digest-file=/kaniko/digest --build-arg PROJECT_ID=${kanikoOptions.gcrProjectId} --build-arg appVersion=${kanikoOptions.currentAppVersion} --build-arg GIT_COMMIT=${env.GIT_COMMIT} --build-arg GIT_URL=${env.GIT_URL} --build-arg GIT_BRANCH=${env.GIT_BRANCH} --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} --build-arg BUILD_URL=${env.BUILD_URL} --build-arg JAR_FILE=${kanikoOptions.currentAppArtifactId}-${kanikoOptions.currentAppVersion}.jar -f `pwd`/Dockerfile_chaos_monkey -c `pwd` --skip-tls-verify --destination=${kanikoOptions.dockerReleaseRegistry}/${kanikoOptions.dockerHub}/${kanikoOptions.currentAppArtifactId}:${kanikoOptions.currentAppVersion}"
+    } else {
+      sh "/kaniko/executor --cleanup --digest-file=/kaniko/digest --build-arg PROJECT_ID=${kanikoOptions.gcrProjectId} --build-arg appVersion=${kanikoOptions.currentAppVersion} --build-arg GIT_COMMIT=${env.GIT_COMMIT} --build-arg GIT_URL=${env.GIT_URL} --build-arg GIT_BRANCH=${env.GIT_BRANCH} --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} --build-arg BUILD_URL=${env.BUILD_URL} --build-arg JAR_FILE=${kanikoOptions.currentAppArtifactId}-${kanikoOptions.currentAppVersion}.jar -f `pwd`/Dockerfile -c `pwd` --skip-tls-verify --destination=${kanikoOptions.dockerReleaseRegistry}/${kanikoOptions.dockerHub}/${kanikoOptions.currentAppArtifactId}:${kanikoOptions.currentAppVersion}"
+    }
+    sh "cat /kaniko/digest"*/
+
+  }
+}
+
+def mavenDeploy(Map mvnOptions) {
+  script {
+    configFileProvider(
+      [configFile(fileId: "${mvnOptions.mvnSettingsXML}", variable: 'MAVEN_SETTINGS')])
+      {
+        sh "mvn ${mvnOptions.mvnDeployParams} -s $MAVEN_SETTINGS"
+      }
+  }
+}
+def mavenBuild(Map mvnOptions) {
+  script {
+    configFileProvider(
+            [configFile(fileId: "${mvnOptions.mvnSettingsXML}", variable: 'MAVEN_SETTINGS')])
+            {
+              PROJECT_VERSION = sh(script: "mvn org.apache.maven.plugins:maven-help-plugin:3.1.0:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
+              VERSION_OVERRIDE = "${PROJECT_VERSION}"
+              if (mvnOptions.buildChaosMonkey) {
+                VERSION_OVERRIDE = "${PROJECT_VERSION}" + "-chaos-monkey"
+                if (!env.BRANCH_NAME.toString().equals("master") && !env.BRANCH_NAME.toString().contains("release-")) {
+                  VERSION_OVERRIDE = "${VERSION_OVERRIDE}" + "-SNAPSHOT"
+                }
+                sh "mvn ${mvnOptions.mvnBuildParams} -s $MAVEN_SETTINGS -DversionOverride=${VERSION_OVERRIDE} -Dchaos-monkey=true"
+              } else {
+                if (!env.BRANCH_NAME.toString().equals("master") && !env.BRANCH_NAME.toString().contains("release-")) {
+                  VERSION_OVERRIDE = "${VERSION_OVERRIDE}" + "-SNAPSHOT"
+                }
+                sh "mvn ${mvnOptions.mvnBuildParams} -s $MAVEN_SETTINGS -DversionOverride=${VERSION_OVERRIDE}"
+              }
+            }
+  }
+}
+
+
+def getBuildOptions (String build_options_file) {
+
+  def propertyInfo = readProperties file: build_options_file
+
+  // Get Credentials ID of Jenkins SSH keys used to access BitBucket
+  jenkinsSSHCredentials = (propertyInfo.jenkinsSSHCredentials == null  || propertyInfo.jenkinsSSHCredentials == '') ? "defaultJenkinsSSH" : propertyInfo.jenkinsSSHCredentials;
+
+  // Get Maven, JDK versions to use
+  jdkVersion  = (propertyInfo.jdkVersion == null  || propertyInfo.jdkVersion == '') ? "jdk" : propertyInfo.jdkVersion;
+  mvnVersion  = (propertyInfo.mvnVersion == null  || propertyInfo.mvnVersion == '') ? "mvn" : propertyInfo.mvnVersion;
+  artifactExtension = (propertyInfo.artifactExtension == null  || propertyInfo.artifactExtension == '') ? "jar" : propertyInfo.artifactExtension;
+
+  // Get Maven parameters to use
+  mvnTestParams = (propertyInfo.mvnTestParams == null || propertyInfo.mvnTestParams == '') ? "test" : propertyInfo.mvnTestParams;
+  mvnBuildParams  = (propertyInfo.mvnBuildParams  == null || propertyInfo.mvnBuildParams == '')  ? "package" : propertyInfo.mvnBuildParams;
+  mvnDeployParams = (propertyInfo.mvnDeployParams == null || propertyInfo.mvnDeployParams == '') ? "deploy" : propertyInfo.mvnDeployParams;
+  mvnDeployParamsSnapshot = (propertyInfo.mvnDeployParamsSnapshot == null || propertyInfo.mvnDeployParamsSnapshot == '') ? "deploy"          : propertyInfo.mvnDeployParamsSnapshot;
+  mvnDeployParamsRPM = (propertyInfo.mvnDeployParamsRPM == null || propertyInfo.mvnDeployParamsRPM == '') ? "deploy"          : propertyInfo.mvnDeployParamsRPM;
+  mvnDeployParamsRelease = (propertyInfo.mvnDeployParamsRelease == null || propertyInfo.mvnDeployParamsRelease == '') ? "deploy"          : propertyInfo.mvnDeployParamsRelease;
+  mvnSettingsXML  = (propertyInfo.mvnSettingsXML  == null || propertyInfo.mvnSettingsXML == '')  ? "defaultMVNSettings" : propertyInfo.mvnSettingsXML;
+  mvnPomXML = (propertyInfo.mvnPomXML == null || propertyInfo.mvnPomXML == '') ? "" : propertyInfo.mvnPomXML;
+  mvnBatchMode = (propertyInfo.mvnBatchMode == null || propertyInfo.mvnBatchMode == '' || propertyInfo.mvnBatchMode == 'false') ? "" : propertyInfo.mvnBatchMode;
+  mvnBatchModeOptions = (propertyInfo.mvnBatchModeOptions == null || propertyInfo.mvnBatchModeOptions == '') ? "" : propertyInfo.mvnBatchModeOptions;
+  mvnUserCredentials = (propertyInfo.mvnUserCredentials == null || propertyInfo.mvnUserCredentials == '') ? "" : propertyInfo.mvnUserCredentials;
+  useLocalMvnRepo  = (propertyInfo.useLocalMvnRepo  == "true") ? "-Dmaven.repo.local=${WORKSPACE}/.m2/repository" : '';
+
+  // Get Nexus repos to use
+  yumReleaseRepo = (propertyInfo.yumReleaseRepo == null || propertyInfo.yumReleaseRepo == '') ? env.yumReleaseRepo : propertyInfo.yumReleaseRepo;
+  yumSnapshotRepo = (propertyInfo.yumSnapshotRepo == null || propertyInfo.yumSnapshotRepo == '') ? env.yumSnapshotRepo : propertyInfo.yumSnapshotRepo;
+  mavenReleaseRepo = (propertyInfo.mavenReleaseRepo == null || propertyInfo.mavenReleaseRepo == '') ? env.mavenReleaseRepo : propertyInfo.mavenReleaseRepo;
+  mavenSnapshotRepo = (propertyInfo.mavenSnapshotRepo == null || propertyInfo.mavenSnapshotRepo == '') ? env.mavenSnapshotRepo : propertyInfo.mavenSnapshotRepo;
+
+  // Get Nexus Registry token to use
+  dockerAuthToken  = (propertyInfo.dockerAuthToken  == null || propertyInfo.dockerAuthToken == '')  ? "defaultDockerAuthToken" : propertyInfo.dockerAuthToken;
+
+  // Get Nexus registry to use
+  dockerReleaseRegistry = (propertyInfo.dockerReleaseRegistry == null || propertyInfo.dockerReleaseRegistry == '') ? env.dockerReleaseRegistry : propertyInfo.dockerReleaseRegistry;
+  dockerAWSReleaseRegistry = (propertyInfo.dockerAWSReleaseRegistry == null || propertyInfo.dockerAWSReleaseRegistry == '') ? env.dockerAWSReleaseRegistry : propertyInfo.dockerAWSReleaseRegistry;
+  dockerSnapshotRegistry = (propertyInfo.dockerSnapshotRegistry == null || propertyInfo.dockerSnapshotRegistry == '') ? env.dockerSnapshotRegistry : propertyInfo.dockerSnapshotRegistry;
+  dockerAWSSnapshotRegistry = (propertyInfo.dockerAWSSnapshotRegistry == null || propertyInfo.dockerAWSSnapshotRegistry == '') ? env.dockerAWSSnapshotRegistry : propertyInfo.dockerAWSSnapshotRegistry;
+
+  // Get Nexus Bucket name to use
+  dockerHub = (propertyInfo.dockerHub == null || propertyInfo.dockerHub == '') ? env.dockerHub : propertyInfo.dockerHub;
+  dockerGsCPHub = (propertyInfo.dockerGCPHub == null || propertyInfo.dockerGCPHub == '') ? env.dockerGCPHub : propertyInfo.dockerGCPHub;
+  dockerAWSHub = (propertyInfo.dockerAWSHub == null || propertyInfo.dockerAWSHub == '') ? env.dockerAWSHub : propertyInfo.dockerAWSHub;
+
+  // Get docker file directory
+  dockerFileDirectory = (propertyInfo.dockerFileDirectory == null || propertyInfo.dockerFileDirectory == '') ? '' : propertyInfo.dockerFileDirectory;
+  dockerFileGCPDirectory = (propertyInfo.dockerFileGCPDirectory == null || propertyInfo.dockerFileGCPDirectory == '') ? '' : propertyInfo.dockerFileGCPDirectory;
+  dockerFileAWSDirectory = (propertyInfo.dockerFileAWSDirectory == null || propertyInfo.dockerFileAWSDirectory == '') ? '' : propertyInfo.dockerFileAWSDirectory;
+
+  // on-prem rpm properties
+  createRPM = (propertyInfo.createRPM == null || propertyInfo.createRPM == '') ? "false" : propertyInfo.createRPM;
+
+  // AWS properties
+  createAWSImage = (propertyInfo.createAWSImage == null || propertyInfo.createAWSImage == '') ? "false" : propertyInfo.createAWSImage;
+
+  // Get NPE GCP-GCR details
+  gcrProjectId = (propertyInfo.gcrProjectId == null || propertyInfo.gcrProjectId == '') ? env.gcrProjectId : propertyInfo.gcrProjectId;
+  gcrAttestor = (propertyInfo.gcrAttestor == null || propertyInfo.gcrAttestor == '') ? env.gcrAttestor : propertyInfo.gcrAttestor;
+  secProject = (propertyInfo.secProject == null || propertyInfo.secProject == '') ? env.secProject : propertyInfo.secProject;
+  kmsKeyring = (propertyInfo.kmsKeyring == null || propertyInfo.kmsKeyring == '') ? env.kmsKeyring : propertyInfo.kmsKeyring;
+  gcrAttestorkey = (propertyInfo.gcrAttestorkey == null || propertyInfo.gcrAttestorkey == '') ? env.gcrAttestorkey : propertyInfo.gcrAttestorkey;
+  createImage = (propertyInfo.createImage == null || propertyInfo.createImage == '') ? "true" : propertyInfo.createImage;
+  createGCPImage = (propertyInfo.createGCPImage == null || propertyInfo.createGCPImage == '') ? "true" : propertyInfo.createGCPImage;
+  enableImageAttestation = (propertyInfo.enableImageAttestation == null || propertyInfo.enableImageAttestation == '') ? "false" : propertyInfo.enableImageAttestation;
+  gcpCustomGcrImageName = (propertyInfo.gcpCustomGcrImageName == null || propertyInfo.gcpCustomGcrImageName == '') ? '' : propertyInfo.gcpCustomGcrImageName;
+
+  // Get PROD GCP-GCR details
+  prodGcrProjectId = (propertyInfo.prodGcrProjectId == null || propertyInfo.prodGcrProjectId == '') ? env.prodGcrProjectId : propertyInfo.prodGcrProjectId;
+  prodGcrAttestor = (propertyInfo.prodGcrAttestor == null || propertyInfo.prodGcrAttestor == '') ? env.prodGcrAttestor : propertyInfo.prodGcrAttestor;
+  prodSecProject = (propertyInfo.prodSecProject == null || propertyInfo.prodSecProject == '') ? env.prodSecProject : propertyInfo.prodSecProject;
+  prodKmsKeyring = (propertyInfo.prodKmsKeyring == null || propertyInfo.prodKmsKeyring == '') ? env.prodKmsKeyring : propertyInfo.prodKmsKeyring;
+  prodGcrAttestorkey = (propertyInfo.prodGcrAttestorkey == null || propertyInfo.prodGcrAttestorkey == '') ? env.prodGcrAttestorkey : propertyInfo.prodGcrAttestorkey;
+  prodEnableImageAttestation = (propertyInfo.prodEnableImageAttestation == null || propertyInfo.prodEnableImageAttestation == '') ? "false" : propertyInfo.prodEnableImageAttestation;
+
+  // Get application installation service account
+  appServiceAccount = (propertyInfo.appServiceAccount == null || propertyInfo.appServiceAccount == '') ? "appSvc" : propertyInfo.appServiceAccount;
+
+  // Get Nexus IQ app name
+  nexusIQ = propertyInfo.nexusIQ
+  nexusIqSvcAccount = (propertyInfo.nexusIqSvcAccount == null  || propertyInfo.nexusIqSvcAccount == '') ? "defaultServiceAccount" : propertyInfo.nexusIqSvcAccount;
+
+  // Get devint, release branch info, release branch prefix
+  releaseBranchPrefix  = (propertyInfo.releaseBranchPrefix == null  || propertyInfo.releaseBranchPrefix == '') ? "" : propertyInfo.releaseBranchPrefix;
+  releaseBranch        = (propertyInfo.releaseBranch == null        || propertyInfo.releaseBranch == '') ? "master" : propertyInfo.releaseBranch;
+  devIntegrationBranch = (propertyInfo.devIntegrationBranch == null || propertyInfo.devIntegrationBranch == '') ? "develop" : propertyInfo.devIntegrationBranch;
+
+  // Get auto deployment target(s). Read value from build_options file, override with job environment variable value if set
+  deployTargetsFromFile = (propertyInfo.deployTargets == null || propertyInfo.deployTargets == '') ? "" : propertyInfo.deployTargets;
+  deployTargets = (env.deployTargets == null || env.deployTargets == '') ? deployTargetsFromFile : env.deployTargets
+
+  // Get flags for running testing
+  enableSonar   = (propertyInfo.enableSonar == null   || propertyInfo.enableSonar == '') ? "true"   : propertyInfo.enableSonar;
+  enableNexusIQ = (propertyInfo.enableNexusIQ == null || propertyInfo.enableNexusIQ == '') ? "true" : propertyInfo.enableNexusIQ;
+  enableAutomation = (propertyInfo.enableAutomation == null || propertyInfo.enableAutomation == '') ? "true" : propertyInfo.enableAutomation;
+
+  // Sleep time setup for Sonar analysis
+  enableSonarSleep = (propertyInfo.enableSonarSleep == null   || propertyInfo.enableSonarSleep == '') ? "15"   : propertyInfo.enableSonarSleep;
+
+  // Kaniko upload timeout period, default 120 seconds
+  kanikoTimeout = (propertyInfo.kanikoTimeout == null   || propertyInfo.kanikoTimeout == '') ? "120"   : propertyInfo.kanikoTimeout;
+  kanikoBuildArgs = (propertyInfo.kanikoBuildArgs == null || propertyInfo.kanikoBuildArgs == '') ? '' : propertyInfo.kanikoBuildArgs;
+
+
+  // FLAG for angular apps
+  isAngularApp = (propertyInfo.isAngularApp == null || propertyInfo.isAngularApp == '') ? "false" : propertyInfo.isAngularApp;
+
+  // Get build container name
+  buildContainerName = (propertyInfo.buildContainerName == null || propertyInfo.buildContainerName == '') ? "notSet" : propertyInfo.buildContainerName;
+
+  // Get build agents name
+  build_agent_label = (propertyInfo.build_agent_label == null || propertyInfo.build_agent_label == '') ? "build-pod" : propertyInfo.build_agent_label;
+
+  // Get googleChat options
+  gChatRoomJenkinsId = (propertyInfo.gChatRoomJenkinsId == null || propertyInfo.gChatRoomJenkinsId == '') ? "id: cicdJenkinsNotification" : propertyInfo.gChatRoomJenkinsId;
+  gChatNotifyAborted = (propertyInfo.gChatNotifyAborted == null || propertyInfo.gChatNotifyAborted == '') ? "false" : propertyInfo.gChatNotifyAborted;
+  gChatNotifyFailure = (propertyInfo.gChatNotifyFailure == null || propertyInfo.gChatNotifyFailure == '') ? "false" : propertyInfo.gChatNotifyFailure;
+  gChatNotifyNotBuilt = (propertyInfo.gChatNotifyNotBuilt == null || propertyInfo.gChatNotifyNotBuilt == '') ? "false" : propertyInfo.gChatNotifyNotBuilt;
+  gChatNotifySuccess = (propertyInfo.gChatNotifySuccess == null || propertyInfo.gChatNotifySuccess == '') ? "false" : propertyInfo.gChatNotifySuccess;
+  gChatNotifyUnstable = (propertyInfo.gChatNotifyUnstable == null || propertyInfo.gChatNotifyUnstable == '') ? "false" : propertyInfo.gChatNotifyUnstable;
+  gChatNotifyBackToNormal = (propertyInfo.gChatNotifyBackToNormal == null || propertyInfo.gChatNotifyBackToNormal == '') ? "false" : propertyInfo.gChatNotifyBackToNormal;
+  gChatSuppressInfoLoggers = (propertyInfo.gChatSuppressInfoLoggers == null || propertyInfo.gChatSuppressInfoLoggers == '') ? "false" : propertyInfo.gChatSuppressInfoLoggers;
+  gChatSameThreadNotification = (propertyInfo.gChatSameThreadNotification == null || propertyInfo.gChatSameThreadNotification == '') ? "false" : propertyInfo.gChatSameThreadNotification;
+
+  // Fortify options
+  enableFortify = (propertyInfo.enableFortify == null  || propertyInfo.enableFortify == '') ? "false" : propertyInfo.enableFortify
+  fortifyUsername = propertyInfo.fortifyUsername
+  fortifyPatCredentials = (propertyInfo.fortifyPatCredentials == null  || propertyInfo.fortifyPatCredentials == '') ? "defaultFortifyPat" : propertyInfo.fortifyPatCredentials
+  fortifyAppId = propertyInfo.fortifyAppId
+  fortifyJiraProject = propertyInfo.fortifyJiraProject
+  fortifyJiraCredentials = (propertyInfo.fortifyJiraCredentials == null  || propertyInfo.fortifyJiraCredentials == '') ? "defaultFortifyJiraUser" : propertyInfo.fortifyJiraCredentials
+  fortifyDevBaseRelease = (propertyInfo.fortifyDevBaseRelease == null  || propertyInfo.fortifyDevBaseRelease == '') ? "master" : propertyInfo.fortifyDevBaseRelease
+  fortifyExeJars = (propertyInfo.fortifyExeJars == null || propertyInfo.fortifyExeJars == '') ? 'false' : propertyInfo.fortifyExeJars
+  fortifyCron = (propertyInfo.fortifyCron == null || propertyInfo.fortifyCron == '') ? '0 0 31 2 *' : propertyInfo.fortifyCron
+  fortifyReleaseName = (propertyInfo.fortifyReleaseName == null  || propertyInfo.fortifyReleaseName == '') ? fortifyDevBaseRelease : propertyInfo.fortifyReleaseName
+  fortifySdlcStatusType = propertyInfo.fortifySdlcStatusType
+  fortifyBugtrackerJob = (propertyInfo.fortifyBugtrackerJob == null || propertyInfo.fortifyBugtrackerJob == '') ? '/fortifyBugtracker' : propertyInfo.fortifyBugtrackerJob;
+  fortifySrcLocation = (propertyInfo.fortifySrcLocation == null || propertyInfo.fortifySrcLocation == '') ? "" : propertyInfo.fortifySrcLocation;
+  fortifySrcExclude = (propertyInfo.fortifySrcExclude == null || propertyInfo.fortifySrcExclude == '') ? "" : propertyInfo.fortifySrcExclude;
+  fortifyLangLevel = (propertyInfo.fortifyLangLevel == null || propertyInfo.fortifyLangLevel == '') ? '1.8' : propertyInfo.fortifyLangLevel;
+  fortifyMicroserviceName = (propertyInfo.fortifyMicroserviceName == null || propertyInfo.fortifyMicroserviceName == '') ? '' : propertyInfo.fortifyMicroserviceName;
+  codeScanPackager = (propertyInfo.codeScanPackager  == null || propertyInfo.codeScanPackager == '') ? '' : propertyInfo.codeScanPackager;
+
+  //GKE NPE Auto Deploy options
+  appDeployFromFile = (propertyInfo.appDeploy == null || propertyInfo.appDeploy == '') ? "false" : propertyInfo.appDeploy;
+  appDeploy = (env.appDeploy == null || env.appDeploy == '') ? appDeployFromFile : env.appDeploy
+  npeDeployJobPath = (propertyInfo.npeDeployJobPath == null || propertyInfo.npeDeployJobPath == '') ? "notSet" : propertyInfo.npeDeployJobPath;
+  clusterNamespace = (propertyInfo.clusterNamespace == null || propertyInfo.clusterNamespace == '') ? "notSet" : propertyInfo.clusterNamespace;
+  clusterLocation = (propertyInfo.clusterLocation == null || propertyInfo.clusterLocation == '') ? "notSet" : propertyInfo.clusterLocation;
+
+  // NPM build and publish options
+  npmBuildParams  = (propertyInfo.npmBuildParams  == null || propertyInfo.npmBuildParams == '')  ? "run build" : propertyInfo.npmBuildParams;
+  npmPublish = (propertyInfo.npmPublish == null || propertyInfo.npmPublish == '') ? "true" : propertyInfo.npmPublish;
+  npmPublishParams = (propertyInfo.npmPublishParams == null || propertyInfo.npmPublishParams == '') ? "publish" : propertyInfo.npmPublishParams;
+
+  // NPM config options
+  // npmRcFile  = (propertyInfo.npmRcFile  == null || propertyInfo.npmRcFile == '')  ? "defaultNPMRCFile" : propertyInfo.npmRcFile;
+  npmAuthToken  = (propertyInfo.npmAuthToken  == null || propertyInfo.npmAuthToken == '')  ? "defaultNpmAuthToken" : propertyInfo.npmAuthToken;
+
+  // NPM nexus repos to use
+  npmGroupRepo = (propertyInfo.npmGroupRepo == null || propertyInfo.npmGroupRepo == '') ? "notSet" : propertyInfo.npmGroupRepo;
+  npmSnapshotRepo = (propertyInfo.npmSnapshotRepo == null || propertyInfo.npmSnapshotRepo == '') ? "notSet" : propertyInfo.npmSnapshotRepo;
+  npmReleaseRepo = (propertyInfo.npmReleaseRepo == null || propertyInfo.npmReleaseRepo == '') ? "notSet" : propertyInfo.npmReleaseRepo;
+
+  // sonar scanner
+  sonarQubeScanner = (propertyInfo.sonarQubeScanner == null || propertyInfo.sonarQubeScanner == '') ? "defaultSonarQubeScanner" : propertyInfo.sonarQubeScanner;
+
+  // Twistlock
+  twistlockCredId = (propertyInfo.twistlockCredId == null || propertyInfo.twistlockCredId == '') ? 'twistlock_cred_id' : propertyInfo.twistlockCredId;
+  dockerTimeout = (propertyInfo.dockerTimeout == null || propertyInfo.dockerTimeout == '') ? kanikoTimeout : propertyInfo.dockerTimeout;
+  dockerOptions = (propertyInfo.dockerOptions == null || propertyInfo.dockerOptions == '') ? "" : propertyInfo.kanikoBuildArgs;
+
+  // Get Central GCR prefix details
+  centralGcrPrefix = (propertyInfo.centralGcrPrefix == null || propertyInfo.centralGcrPrefix == '') ? "appsvcs-drew" : propertyInfo.centralGcrPrefix;
+  gcrHostname = (propertyInfo.gcrHostname == null || propertyInfo.gcrHostname == '') ? 'gcr.io' : propertyInfo.gcrHostname;
+  commonGCR = (propertyInfo.commonGCR == null || propertyInfo.commonGCR == '') ? 'iaas-gcr-reg-prd-ad3d' : propertyInfo.commonGCR;
+
+  return this
+}
+
+
+/*----------------------------------------------------------------------------*/
+/*                       checkout and set the build agent                     */
+/*----------------------------------------------------------------------------*/
+
+  def agent_label = "tf-apps-em-core-npe"
+  node('master') {
+    stage('checkout and set agent') {
+      checkout scm
+      def props = readProperties  file:"${WORKSPACE}/scm/build_options.txt"
+      agent_label= props['build_agent_label']
+      echo "agent_label is ${agent_label}"
+      deleteDir()
+    }
+  }
+
+/*----------------------------------------------------------------------------*/
+/*        Job handles building/packaging/testing/deployment of an app.        */
+/* Job is called from a multi-branch pipeline job.                            */
+/*----------------------------------------------------------------------------*/
+
+  pipeline {
+    agent {
+      label "${agent_label}"
+    }
+
+    parameters {
+      booleanParam(name: 'createRelease', defaultValue: false, description: 'Create a release from the repo release branch (usually master)')
+      booleanParam(name: 'enableFortify', defaultValue: false, description: 'Run a Fortify scan on this branch')
+      booleanParam(name: 'appDeploy', defaultValue: false, description: 'Deploy using npe-deploy job')
+      credentials credentialType: 'org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl', defaultValue: 'NEXUS_GCP_USR', description: '', name: 'NEXUS_GCP_USR', required: true
+      credentials credentialType: 'org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl', defaultValue: 'NEXUS_GCP_PSW', description: '', name: 'NEXUS_GCP_PSW', required: true
+
+    }
+
+    options {
+      buildDiscarder logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '', numToKeepStr: '10')
+      disableConcurrentBuilds()
+    }
+
+    environment {
+      currentAppVersion = ''
+      currentAppGroupId = ''
+      currentAppArtifactId = ''
+      newAppVersion = ''
+      pomInfo = ''
+      build_options_file = 'scm/build_options.txt'
+      iqStage = 'build'
+      image_sha = ''
+      fortifySdlcStatusType = "development"
+      branchName = ''
+    }
+
+    stages {
+
+/*----------------------------------------------------------------------------*/
+/*                  Prep workspace, get repo, app/build info                  */
+/*----------------------------------------------------------------------------*/
+
+      stage('prep') {
+        steps {
+          echo "Deleting workspace..."
+          deleteDir ()
+
+          echo "Checking out repo..."
+          checkout scm
+
+          script {
+            echo "Getting app data..."
+            pomInfo = readMavenPom file: 'pom.xml'
+            currentAppVersion=pomInfo.version
+            currentAppGroupId=pomInfo.groupId
+            currentAppArtifactId=pomInfo.artifactId
+            LOCALPATH = sh(script: "pwd", returnStdout: true).trim()
+            echo "Getting build options..."
+            getBuildOptions = getBuildOptions(build_options_file)
+          }
+        }
+      }
+
+/*----------------------------------------------------------------------------*/
+/* Create release if build flag is true & branch name matches releaseBranch   */
+/* listed in build_options file (usually master).                             */
+/*----------------------------------------------------------------------------*/
+
+      stage('create release') {
+        when {
+          allOf {
+            branch "${getBuildOptions.releaseBranch}"
+            environment name: "createRelease", value: 'true'
+          }
+        }
+
+        steps {
+          container("${getBuildOptions.buildContainerName}") {
+            script {
+              // Set the iqStage to "release" for release builds
+              iqStage = "release"
+              currentAppVersion = createReleaseTag (appVersion: "${currentAppVersion}",
+                      releaseBranchPrefix: "${getBuildOptions.releaseBranchPrefix}",
+                      mvnSettingsXML: "${getBuildOptions.mvnSettingsXML}",
+                      jenkinsSSHCredentials: "${getBuildOptions.jenkinsSSHCredentials}")
+              fortifySdlcStatusType = 'production'
+              getBuildOptions.fortifyReleaseName = "${currentAppArtifactId}-${currentAppVersion}"
+            }
+          }
+        }
+      }
+/*----------------------------------------------------------------------------*/
+/*                               Compile the app                              */
+/*----------------------------------------------------------------------------*/
+
+      stage('compile') {
+        steps {
+          container("${getBuildOptions.buildContainerName}") {
+            script {
+              if ("${currentAppVersion}" =~ "SNAPSHOT") {
+                branchName = "${env.BRANCH_NAME}".replaceAll ('/|-', '_')
+                //Adds branch name to version..not needed.
+                currentAppVersion="${currentAppVersion}"
+
+                // update pom files so apps will be built with new version
+                configFileProvider(
+                        [configFile(fileId: "${getBuildOptions.mvnSettingsXML}", variable: 'MAVEN_SETTINGS')])
+                        {
+                          sh "mvn -s $MAVEN_SETTINGS versions:set -DnewVersion=${currentAppVersion} -DgenerateBackupPoms=false ${getBuildOptions.mvnBatchMode} ${getBuildOptions.mvnBatchModeOptions}"
+                        }
+              }
+              else
+                echo "No version update for Release build"
+sh "find ."
+              mavenBuild(mvnSettingsXML: "${getBuildOptions.mvnSettingsXML}", mvnBuildParams: "${getBuildOptions.mvnBuildParams} ${getBuildOptions.useLocalMvnRepo} ${getBuildOptions.mvnBatchMode} ${getBuildOptions.mvnBatchModeOptions}")
+              jacoco(
+                      execPattern: 'target/**/*.exec,**/jacoco.exec',
+                      classPattern: 'target/classes,**/target/classes',
+                      sourcePattern: 'src/main/java,**/src/main/java',
+                      exclusionPattern: 'src/test*,**/src/test*'
+              )
+            }
+          }
+        }
+      }
+
+
+
+
+/*----------------------------------------------------------------------------*/
+/*  Upload application artifacts to repo server only when not a Pull Request  */
+/*----------------------------------------------------------------------------*/
+
+      stage ('upload') {
+        when {
+          expression {
+            !env.BRANCH_NAME.contains ("PR-")
+          }
+        }
+        steps {
+          withCredentials([
+                    usernamePassword(credentialsId: "GCPNexusUserToken", usernameVariable: 'NEXUS_GCP_USR', passwordVariable: 'NEXUS_GCP_PSW')
+            ]) {
+            container("${getBuildOptions.buildContainerName}") {
+              script {
+                mavenDeploy(mvnSettingsXML: "${getBuildOptions.mvnSettingsXML}", mvnDeployParams: "${getBuildOptions.mvnDeployParams} ${getBuildOptions.useLocalMvnRepo}")
+              }
+            }
+          }
+        }
+      }
+
+/*----------------------------------------------------------------------------*/
+/*                      Kaniko  -     Build and Push Image                    */
+/*----------------------------------------------------------------------------*/
+
+      stage('image-build/push') {
+        environment {
+          PATH = "/busybox:/kaniko:$PATH"
+        }
+        when {
+          expression {
+            getBuildOptions.createImage.matches ("true")
+          }
+        }
+        steps {
+          container(name: 'kaniko', shell: '/busybox/sh') {
+            dir("${getBuildOptions.dockerFileDirectory}") {
+              script {
+                timeout (time: "${getBuildOptions.kanikoTimeout}", unit: "SECONDS") {
+                  echo "${getBuildOptions.dockerFileDirectory}"
+                  echo "currentAppVersion is ${currentAppVersion}"
+                  //if ((getBuildOptions.dockerFileDirectory.equals('')).equals(false)) {
+                    pomInfo = readMavenPom file: 'sup-long-polling-api/pom.xml'
+                    currentAppVersion=pomInfo.version
+                    currentAppGroupId=pomInfo.groupId
+                    currentAppArtifactId=pomInfo.artifactId
+
+                    echo "dockerAppVersion is ${currentAppVersion}"
+                    echo "dockerAppGroupId is ${currentAppGroupId}"
+                    echo "dockerAppArtifactId is ${currentAppArtifactId}"
+                  kanikoCustom(gcrProjectId: "${getBuildOptions.gcrProjectId}", currentAppVersion: "${currentAppVersion}", currentAppArtifactId: "${currentAppArtifactId}", dockerReleaseRegistry: "${getBuildOptions.dockerReleaseRegistry}",dockerHub: "${getBuildOptions.dockerHub}")
+                }
+              }
+            }
+          }
+        }
+      }
+
+/*----------------------------------------------------------------------------*/
+/*                            Sign and Attest Image                           */
+/*----------------------------------------------------------------------------*/
+
+      stage('sign/attest image') {
+        when {
+          expression {
+            getBuildOptions.createImage.matches ("true") && getBuildOptions.enableImageAttestation.matches ("true") && !env.BRANCH_NAME.contains ("PR-")
+          }
+        }
+        steps {
+          container('google-cloud-sdk') {
+            script {
+              attestImage(gcrProjectId: "${getBuildOptions.gcrProjectId}", currentAppArtifactId: "${currentAppArtifactId}", currentAppVersion: "${currentAppVersion}", gcrAttestor: "${getBuildOptions.gcrAttestor}", secProject: "${getBuildOptions.secProject}", kmsKeyring: "${getBuildOptions.kmsKeyring}", gcrAttestorkey: "${getBuildOptions.gcrAttestorkey}")
+            }
+          }
+        }
+      }
+    }
+  }
