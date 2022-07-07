@@ -12,7 +12,7 @@ public class StudentController {
 		for(int i=0;i<s1.length();i++) {
 			for(int j =i+1; j<s1.length();j++) {
 				if(a[i] == a[j]) {
-					System.out.println("values:::"  +s1.charAt(i));
+					System.out.println(":::"  +s1.charAt(i));
 					b[i]=s1.charAt(i);
 					break;
 				}
